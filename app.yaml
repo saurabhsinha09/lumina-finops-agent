@@ -3,3 +3,13 @@ command: [
   "run",
   "app.py"
 ]
+
+env:
+  - name: "DATABRICKS_WAREHOUSE_ID"
+    value: "7474655178011522"
+  - name: "DATABRICKS_CATALOG"
+    value: "finops"
+  - name: "DATABRICKS_SCHEMA"
+    value: "finops_gold"
+  - name: "GENIE_SPACE_ID"
+    value: "01f149e347941ef29f3fe1ca90030478"

@@ -9,145 +9,30 @@ WAREHOUSE_ID = os.getenv("DATABRICKS_WAREHOUSE_ID")
 CATALOG = os.getenv("DATABRICKS_CATALOG", "finops")
 SCHEMA = os.getenv("DATABRICKS_SCHEMA", "finops_gold")
 
-def parse_date_intent(query_text: str):
-    """Maps natural language months to the correct year."""
-    query_lower = query_text.lower()
-    
-    # 2025 Mapping
-    months_25 = {
-        "october": "2025-10", "oct": "2025-10",
-        "november": "2025-11", "nov": "2025-11",
-        "december": "2025-12", "dec": "2025-12"
-    }
-    for name, pattern in months_25.items():
-        if name in query_lower: return pattern
-
-    # 2026 Mapping
-    months_26 = {
-        "january": "2026-01", "jan": "2026-01",
-        "february": "2026-02", "feb": "2026-02",
-        "march": "2026-03", "mar": "2026-03",
-        "april": "2026-04", "apr": "2026-04"
-    }
-    for name, pattern in months_26.items():
-        if name in query_lower: return pattern
-    
-    return "2026-"
-
-def detect_anomaly(query_text: str):
-    """Detects cost spikes and returns a consistent 'details' key to avoid KeyErrors."""
-    date_pattern = parse_date_intent(query_text)
-    
-    anomaly_sql = f"""
-    WITH daily_costs AS (
-        -- Step 1: Aggregate costs per resource per day first
-        SELECT 
-            resource_id,
-            usage_start_date,
-            SUM(unblended_cost) as total_daily_cost
-        FROM {CATALOG}.{SCHEMA}.billing_summary
-        WHERE usage_start_date LIKE '{date_pattern}%'
-        GROUP BY 1, 2
-    ),
-    stats AS (
-        -- Step 2: Calculate 7-day rolling average on aggregated data
-        SELECT 
-            resource_id,
-            usage_start_date,
-            total_daily_cost as current_cost,
-            AVG(total_daily_cost) OVER (
-                PARTITION BY resource_id 
-                ORDER BY usage_start_date 
-                ROWS BETWEEN 7 PRECEDING and 1 PRECEDING
-            ) as avg_prior
-        FROM daily_costs
-    )
-    SELECT resource_id, current_cost, avg_prior, usage_start_date
-    FROM stats
-    WHERE current_cost > (avg_prior * 1.2)
-    AND avg_prior > 0 -- Avoid division by zero/initial noise
-    ORDER BY usage_start_date DESC
-    """
-    
-    try:
-        res = w.statement_execution.execute_statement(
-            warehouse_id=WAREHOUSE_ID, 
-            statement=anomaly_sql
-        )
-        
-        if res.result and res.result.data_array and len(res.result.data_array) > 0:
-            found_spikes = []
-            spike_descriptions = []
-            
-            for row in res.result.data_array:
-                # Create structured data
-                spike_info = {
-                    "resource_id": row[0],
-                    "cost": float(row[1]),
-                    "avg": float(row[2]),
-                    "date": row[3]
-                }
-                found_spikes.append(spike_info)
-                # Create a string description for the 'details' key
-                spike_descriptions.append(f"- {row[0]} cost ${float(row[1]):,.2f} on {row[3]}")
-
-            return {
-                "status": "spikes_found",
-                "data": found_spikes,
-                "details": "The following anomalies were detected:\n" + "\n".join(spike_descriptions[:5])
-            }
-            
-    except Exception as e:
-        return {"status": "error", "details": f"SQL Error: {str(e)}"}
-
-    # Fallback Summary
-    summary_sql = f"""
-    SELECT cloud_provider, SUM(unblended_cost) 
-    FROM {CATALOG}.{SCHEMA}.billing_summary 
-    WHERE usage_start_date LIKE '{date_pattern}%' 
-    GROUP BY 1 ORDER BY 2 DESC
-    """
-    try:
-        sum_res = w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=summary_sql)
-        if sum_res.result and sum_res.result.data_array:
-            breakdown = "\n".join([f"- {r[0]}: ${float(r[1]):,.2f}" for r in sum_res.result.data_array])
-            return {
-                "status": "normal", 
-                "details": f"No spikes found. Summary for {date_pattern}:\n{breakdown}"
-            }
-    except:
-        pass
-
-    return {"status": "normal", "details": f"No data found for {date_pattern}."}
-
-def lookup_lakebase_memory(resource_id: str):
-    """Searches Lakebase Memory for approval justifications."""
-    memory_sql = f"""
-    SELECT note, approved_by FROM {CATALOG}.{SCHEMA}.lakebase_memory 
-    WHERE resource_id = '{resource_id}' LIMIT 1
-    """
-    try:
-        res = w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=memory_sql)
-        if res.result and res.result.data_array and len(res.result.data_array) > 0:
-            return f"Context found: Approved by {res.result.data_array[0][1]} - '{res.result.data_array[0][0]}'"
-    except:
-        pass
-        
-    return "No prior approval notes found in Lakebase memory for this resource."
+# --- 1. PERSISTENCE LOGIC (Chat History) ---
 
 def save_chat_message(session_id: str, user_email: str, role: str, content: str):
-    """Persists every turn of the conversation to Delta."""
+    """
+    Persists a single chat turn into the Delta history table.
+    Ensures the agent 'remembers' the conversation context across refreshes.
+    """
+    # Escaping single quotes to prevent SQL syntax errors in content
+    clean_content = content.replace("'", "''")
+    
     insert_sql = f"""
     INSERT INTO {CATALOG}.{SCHEMA}.chat_history 
-    VALUES ('{session_id}', '{user_email}', '{role}', '{content.replace("'", "''")}', CURRENT_TIMESTAMP())
+    (session_id, user_email, role, content, timestamp)
+    VALUES ('{session_id}', '{user_email}', '{role}', '{clean_content}', CURRENT_TIMESTAMP())
     """
     try:
         w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=insert_sql)
     except Exception as e:
-        print(f"History Save Error: {e}")
+        print(f"Error saving chat history: {e}")
 
-def load_chat_history(user_email: str, limit: int = 10):
-    """Retrieves the last N messages for the user to rebuild context."""
+def load_chat_history(user_email: str, limit: int = 15):
+    """
+    Retrieves previous messages for a specific user to rebuild session state.
+    """
     load_sql = f"""
     SELECT role, content FROM {CATALOG}.{SCHEMA}.chat_history 
     WHERE user_email = '{user_email}' 
@@ -156,8 +41,102 @@ def load_chat_history(user_email: str, limit: int = 10):
     try:
         res = w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=load_sql)
         if res.result and res.result.data_array:
-            # Reverse because we fetched DESC but want to display CHRONOLOGICAL
-            return [{"role": r[0], "content": r[1]} for r in reversed(res.result.data_array)]
+            # We fetch DESC to get the latest, but we return in chronological order for the UI
+            history = [{"role": r[0], "content": r[1]} for r in res.result.data_array]
+            return history[::-1] 
+    except Exception as e:
+        print(f"Error loading chat history: {e}")
+    return []
+
+# --- 2. GOVERNANCE LOGIC (Lakebase Persistence) ---
+
+def persist_decision(resource_id: str, action: str, note: str, user_email: str):
+    """
+    Writes a governance decision (SNOOZE/APPROVE) to Lakebase memory.
+    This fulfills the requirement: 'Decisions are saved back to Lakebase to inform future reasoning.'
+    """
+    clean_note = note.replace("'", "''")
+    
+    # We use an UPSERT-like logic or simple INSERT depending on your preference.
+    # Here we INSERT to maintain an audit trail of all decisions.
+    insert_sql = f"""
+    INSERT INTO {CATALOG}.{SCHEMA}.lakebase_memory 
+    (resource_id, note, approved_by, status, timestamp)
+    VALUES ('{resource_id}', '{clean_note}', '{user_email}', '{action}', CURRENT_TIMESTAMP())
+    """
+    try:
+        w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=insert_sql)
+        return f"Successfully persisted {action} status for {resource_id} in Lakebase."
+    except Exception as e:
+        return f"Governance Error: Could not save decision. {str(e)}"
+
+# --- 3. DISCOVERY LOGIC (Anomaly Detection) ---
+
+def parse_date_intent(query_text: str):
+    """Maps natural language months to the dataset date patterns."""
+    query_lower = query_text.lower()
+    months_map = {
+        "oct": "2025-10", "nov": "2025-11", "dec": "2025-12",
+        "jan": "2026-01", "feb": "2026-02", "mar": "2026-03", "apr": "2026-04"
+    }
+    for key, val in months_map.items():
+        if key in query_lower: return val
+    return "2026-" # Default fallback
+
+def detect_anomaly(query_text: str):
+    """Aggregated anomaly detection with 7-day baseline."""
+    date_pattern = parse_date_intent(query_text)
+    
+    anomaly_sql = f"""
+    WITH daily_costs AS (
+        SELECT resource_id, usage_start_date, SUM(unblended_cost) as total_daily_cost
+        FROM {CATALOG}.{SCHEMA}.billing_summary
+        WHERE usage_start_date LIKE '{date_pattern}%'
+        GROUP BY 1, 2
+    ),
+    stats AS (
+        SELECT resource_id, usage_start_date, total_daily_cost as current_cost,
+        AVG(total_daily_cost) OVER (PARTITION BY resource_id ORDER BY usage_start_date ROWS BETWEEN 7 PRECEDING and 1 PRECEDING) as avg_prior
+        FROM daily_costs
+    )
+    SELECT resource_id, current_cost, avg_prior, usage_start_date
+    FROM stats
+    WHERE current_cost > (avg_prior * 1.2) AND avg_prior > 0
+    ORDER BY usage_start_date DESC
+    """
+    
+    try:
+        res = w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=anomaly_sql)
+        if res.result and res.result.data_array and len(res.result.data_array) > 0:
+            found_spikes = []
+            descriptions = []
+            for row in res.result.data_array:
+                found_spikes.append({"resource_id": row[0], "cost": float(row[1]), "avg": float(row[2]), "date": row[3]})
+                descriptions.append(f"- {row[0]}: ${float(row[1]):,.2f} on {row[3]}")
+            
+            return {
+                "status": "spikes_found",
+                "data": found_spikes,
+                "details": "Detected spikes:\\n" + "\\n".join(descriptions[:5])
+            }
+    except Exception as e:
+        return {"status": "error", "details": str(e)}
+
+    return {"status": "normal", "details": f"No anomalies found for {date_pattern}."}
+
+def lookup_lakebase_memory(resource_id: str):
+    """Fetches the latest governance status/note for a resource."""
+    memory_sql = f"""
+    SELECT status, note, approved_by 
+    FROM {CATALOG}.{SCHEMA}.lakebase_memory 
+    WHERE resource_id = '{resource_id}' 
+    ORDER BY timestamp DESC LIMIT 1
+    """
+    try:
+        res = w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=memory_sql)
+        if res.result and res.result.data_array:
+            r = res.result.data_array[0]
+            return f"[{r[0]}] by {r[2]}: {r[1]}"
     except:
         pass
-    return []
+    return "No prior context found."

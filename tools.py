@@ -3,8 +3,13 @@ import pandas as pd
 from databricks.sdk import WorkspaceClient
 
 # Initialize the Databricks Workspace Client
-# The SDK will automatically use the App's Service Principal authentication
-w = WorkspaceClient()
+# Explicitly pull the credentials provided by the App environment
+w = WorkspaceClient(
+    host=os.getenv("DATABRICKS_HOST"),
+    client_id=os.getenv("DATABRICKS_CLIENT_ID"),
+    client_secret=os.getenv("DATABRICKS_CLIENT_SECRET"),
+    warehouse_id=os.getenv("DATABRICKS_WAREHOUSE_ID")
+)
 
 # Load Environment Variables set in the Databricks App UI
 WAREHOUSE_ID = os.getenv("DATABRICKS_WAREHOUSE_ID")

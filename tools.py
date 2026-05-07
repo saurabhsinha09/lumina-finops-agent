@@ -39,22 +39,33 @@ def detect_anomaly(query_text: str):
     date_pattern = parse_date_intent(query_text)
     
     anomaly_sql = f"""
-    WITH stats AS (
+    WITH daily_costs AS (
+        -- Step 1: Aggregate costs per resource per day first
         SELECT 
             resource_id,
             usage_start_date,
-            unblended_cost as current_cost,
-            AVG(unblended_cost) OVER (
+            SUM(unblended_cost) as total_daily_cost
+        FROM {CATALOG}.{SCHEMA}.billing_summary
+        WHERE usage_start_date LIKE '{date_pattern}%'
+        GROUP BY 1, 2
+    ),
+    stats AS (
+        -- Step 2: Calculate 7-day rolling average on aggregated data
+        SELECT 
+            resource_id,
+            usage_start_date,
+            total_daily_cost as current_cost,
+            AVG(total_daily_cost) OVER (
                 PARTITION BY resource_id 
                 ORDER BY usage_start_date 
                 ROWS BETWEEN 7 PRECEDING and 1 PRECEDING
             ) as avg_prior
-        FROM {CATALOG}.{SCHEMA}.billing_summary
-        WHERE usage_start_date LIKE '{date_pattern}%'
+        FROM daily_costs
     )
     SELECT resource_id, current_cost, avg_prior, usage_start_date
     FROM stats
     WHERE current_cost > (avg_prior * 1.2)
+    AND avg_prior > 0 -- Avoid division by zero/initial noise
     ORDER BY usage_start_date DESC
     """
     
@@ -83,7 +94,7 @@ def detect_anomaly(query_text: str):
             return {
                 "status": "spikes_found",
                 "data": found_spikes,
-                "details": "The following anomalies were detected:\n" + "\n".join(spike_descriptions)
+                "details": "The following anomalies were detected:\n" + "\n".join(spike_descriptions[:5])
             }
             
     except Exception as e:

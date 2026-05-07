@@ -1,5 +1,6 @@
 import os
 from databricks.sdk import WorkspaceClient
+import uuid
 
 # Initialize the Databricks Workspace Client
 w = WorkspaceClient()
@@ -50,25 +51,33 @@ def load_chat_history(user_email: str, limit: int = 15):
 
 # --- 2. GOVERNANCE LOGIC (Lakebase Persistence) ---
 
-def persist_decision(resource_id: str, action: str, note: str, user_email: str):
+def persist_decision(resource_id: str, action_str: str, note: str, user_email: str):
     """
-    Writes a governance decision (SNOOZE/APPROVE) to Lakebase memory.
-    This fulfills the requirement: 'Decisions are saved back to Lakebase to inform future reasoning.'
+    Writes to your schema: event_id, resource_id, note, approved_by, expiry_date
     """
-    clean_note = note.replace("'", "''")
+    # Generate a unique event ID
+    event_id = str(uuid.uuid4())[:8]
     
-    # We use an UPSERT-like logic or simple INSERT depending on your preference.
-    # Here we INSERT to maintain an audit trail of all decisions.
+    # Let's assume 'Snooze' sets an expiry 30 days out
+    # 'Approve' could set an expiry 10 years out (effectively permanent)
+    days_to_add = 30 if action_str == "SNOOZE" else 3650
+    
     insert_sql = f"""
     INSERT INTO {CATALOG}.{SCHEMA}.lakebase_memory 
-    (resource_id, note, approved_by, status, timestamp)
-    VALUES ('{resource_id}', '{clean_note}', '{user_email}', '{action}', CURRENT_TIMESTAMP())
+    (event_id, resource_id, note, approved_by, expiry_date)
+    VALUES (
+        '{event_id}', 
+        '{resource_id}', 
+        '{action_str}: {note}', 
+        '{user_email}', 
+        DATE_ADD(CURRENT_DATE(), {days_to_add})
+    )
     """
     try:
         w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=insert_sql)
-        return f"Successfully persisted {action} status for {resource_id} in Lakebase."
+        return f"Decision persisted under Event ID {event_id}. Expiry set for {days_to_add} days."
     except Exception as e:
-        return f"Governance Error: Could not save decision. {str(e)}"
+        return f"Error: {str(e)}"
 
 # --- 3. DISCOVERY LOGIC (Anomaly Detection) ---
 
@@ -125,18 +134,21 @@ def detect_anomaly(query_text: str):
     return {"status": "normal", "details": f"No anomalies found for {date_pattern}."}
 
 def lookup_lakebase_memory(resource_id: str):
-    """Fetches the latest governance status/note for a resource."""
+    """
+    Check if a resource has an active (non-expired) note.
+    """
     memory_sql = f"""
-    SELECT status, note, approved_by 
+    SELECT note, approved_by, expiry_date 
     FROM {CATALOG}.{SCHEMA}.lakebase_memory 
     WHERE resource_id = '{resource_id}' 
-    ORDER BY timestamp DESC LIMIT 1
+    AND expiry_date >= CURRENT_DATE()
+    ORDER BY expiry_date DESC LIMIT 1
     """
     try:
         res = w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=memory_sql)
         if res.result and res.result.data_array:
             r = res.result.data_array[0]
-            return f"[{r[0]}] by {r[2]}: {r[1]}"
+            return f"Approved by {r[1]} until {r[2]}: {r[0]}"
     except:
         pass
-    return "No prior context found."
+    return "No active approval or snooze found."

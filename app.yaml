@@ -6,7 +6,7 @@ command: [
 
 env:
   - name: "DATABRICKS_WAREHOUSE_ID"
-    value: "7474655178011522"
+    value: "bb23f7651eabe681"
   - name: "DATABRICKS_CATALOG"
     value: "finops"
   - name: "DATABRICKS_SCHEMA"

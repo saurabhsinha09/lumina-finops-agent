@@ -1,28 +1,20 @@
 import os
-import pandas as pd
 from databricks.sdk import WorkspaceClient
 
-# Initialize the Databricks Workspace Client
-# Explicitly pull the credentials provided by the App environment
-w = WorkspaceClient(
-    host=os.getenv("DATABRICKS_HOST"),
-    client_id=os.getenv("DATABRICKS_CLIENT_ID"),
-    client_secret=os.getenv("DATABRICKS_CLIENT_SECRET"),
-    warehouse_id=os.getenv("DATABRICKS_WAREHOUSE_ID")
-)
+# Initialize the client without the warehouse_id
+# It will use DATABRICKS_HOST, CLIENT_ID, and CLIENT_SECRET from the environment
+w = WorkspaceClient()
 
-# Load Environment Variables set in the Databricks App UI
+# Pull variables for use in functions
 WAREHOUSE_ID = os.getenv("DATABRICKS_WAREHOUSE_ID")
 CATALOG = os.getenv("DATABRICKS_CATALOG", "finops")
 SCHEMA = os.getenv("DATABRICKS_SCHEMA", "finops_gold")
 
 def detect_anomaly(query_text: str):
-    """
-    1. Runs a Window Function to find spikes > 20% vs 7-day average.
-    2. If no spike is found, returns a high-level cost summary for the month.
-    """
+    # Determine which month to look at based on the user prompt
+    month_filter = "2026-03" if "March" in query_text else "2026-01"
     
-    # --- STEP 1: MATHEMATICAL SPIKE DETECTION ---
+    # SQL to find spikes > 20% vs 7-day rolling average
     anomaly_sql = f"""
     WITH stats AS (
         SELECT 
@@ -32,19 +24,20 @@ def detect_anomaly(query_text: str):
             AVG(unblended_cost) OVER (
                 PARTITION BY resource_id 
                 ORDER BY usage_start_date 
-                ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+                ROWS BETWEEN 7 PRECEDING and 1 PRECEDING
             ) as avg_prior
         FROM {CATALOG}.{SCHEMA}.billing_summary
+        WHERE usage_start_date LIKE '{month_filter}%'
     )
     SELECT resource_id, current_cost, avg_prior, usage_start_date
     FROM stats
-    WHERE current_cost > (avg_prior * 1.2) -- 20% Threshold
-    AND usage_start_date >= '2025-10-01'
+    WHERE current_cost > (avg_prior * 1.2)
     ORDER BY usage_start_date DESC
     LIMIT 1
     """
     
     try:
+        # Pass the warehouse_id HERE, not in the constructor
         res = w.statement_execution.execute_statement(
             warehouse_id=WAREHOUSE_ID, 
             statement=anomaly_sql
@@ -55,65 +48,35 @@ def detect_anomaly(query_text: str):
             return {
                 "status": "spike_found",
                 "resource_id": row[0],
-                "details": f"Anomaly Detected: {row[0]} cost was ${row[1]:.2f} on {row[3]}, which is significantly higher than the 7-day average of ${row[2]:.2f}."
+                "details": f"Anomaly: {row[0]} cost ${row[1]:.2f} on {row[3]} (Avg: ${row[2]:.2f})."
             }
             
     except Exception as e:
-        return {"status": "error", "details": f"SQL Error: {str(e)}"}
+        return {"status": "error", "details": f"Connection Error: {str(e)}"}
 
-    # --- STEP 2: SUMMARY FALLBACK (If no spike found) ---
-    # We extract the month if mentioned, otherwise default to latest data
-    month_filter = "2026-03" if "March" in query_text else "2026-01"
-    
+    # Fallback Summary Logic
     summary_sql = f"""
-    SELECT cloud_provider, SUM(unblended_cost) as total_cost
-    FROM {CATALOG}.{SCHEMA}.billing_summary
-    WHERE usage_start_date LIKE '{month_filter}%'
+    SELECT cloud_provider, SUM(unblended_cost) 
+    FROM {CATALOG}.{SCHEMA}.billing_summary 
+    WHERE usage_start_date LIKE '{month_filter}%' 
     GROUP BY 1
-    ORDER BY 2 DESC
     """
-    
     try:
-        summary_res = w.statement_execution.execute_statement(
-            warehouse_id=WAREHOUSE_ID, 
-            statement=summary_sql
-        )
-        
-        if summary_res.result.data_array:
-            lines = [f"- {r[0]}: ${r[1]:,.2f}" for r in summary_res.result.data_array]
-            breakdown = "\n".join(lines)
-            return {
-                "status": "normal",
-                "details": f"No significant spikes found for this period. Here is the cost breakdown for {month_filter}:\n\n{breakdown}"
-            }
+        sum_res = w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=summary_sql)
+        if sum_res.result.data_array:
+            breakdown = "\n".join([f"- {r[0]}: ${r[1]:,.2f}" for r in sum_res.result.data_array])
+            return {"status": "normal", "details": f"Stable usage for {month_filter}:\n{breakdown}"}
     except:
         pass
 
-    return {"status": "normal", "details": "Billing is stable and no anomalies were detected."}
+    return {"status": "normal", "details": "No anomalies detected."}
 
 def lookup_lakebase_memory(resource_id: str):
-    """
-    Queries the Lakebase Memory table for approval notes tied to a specific resource.
-    """
-    memory_sql = f"""
-    SELECT note, approved_by 
-    FROM {CATALOG}.{SCHEMA}.lakebase_memory 
-    WHERE resource_id = '{resource_id}'
-    LIMIT 1
-    """
-    
+    sql = f"SELECT note, approved_by FROM {CATALOG}.{SCHEMA}.lakebase_memory WHERE resource_id = '{resource_id}' LIMIT 1"
     try:
-        res = w.statement_execution.execute_statement(
-            warehouse_id=WAREHOUSE_ID, 
-            statement=memory_sql
-        )
-        
+        res = w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=sql)
         if res.result.data_array:
-            note = res.result.data_array[0][0]
-            approver = res.result.data_array[0][1]
-            return f"Approved by {approver}: {note}"
-            
-    except Exception as e:
-        print(f"Memory lookup error: {e}")
-        
+            return f"Approved by {res.result.data_array[0][1]}: {res.result.data_array[0][0]}"
+    except:
+        pass
     return None

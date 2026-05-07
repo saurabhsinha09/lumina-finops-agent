@@ -2,7 +2,6 @@ import os
 from databricks.sdk import WorkspaceClient
 
 # Initialize the Databricks Workspace Client
-# Uses App Service Principal credentials (ID and Secret) from environment
 w = WorkspaceClient()
 
 # Configuration from Environment Variables
@@ -11,11 +10,7 @@ CATALOG = os.getenv("DATABRICKS_CATALOG", "finops")
 SCHEMA = os.getenv("DATABRICKS_SCHEMA", "finops_gold")
 
 def parse_date_intent(query_text: str):
-    """
-    Maps natural language months to the correct year:
-    - Oct to Dec -> 2025
-    - Jan to Apr -> 2026
-    """
+    """Maps natural language months to the correct year."""
     query_lower = query_text.lower()
     
     # 2025 Mapping
@@ -25,8 +20,7 @@ def parse_date_intent(query_text: str):
         "december": "2025-12", "dec": "2025-12"
     }
     for name, pattern in months_25.items():
-        if name in query_lower:
-            return pattern
+        if name in query_lower: return pattern
 
     # 2026 Mapping
     months_26 = {
@@ -36,19 +30,14 @@ def parse_date_intent(query_text: str):
         "april": "2026-04", "apr": "2026-04"
     }
     for name, pattern in months_26.items():
-        if name in query_lower:
-            return pattern
+        if name in query_lower: return pattern
     
-    return "2026-" # Default fallback
+    return "2026-"
 
 def detect_anomaly(query_text: str):
-    """
-    Detects cost spikes > 20% compared to the 7-day rolling average.
-    Returns a list of all spikes found for the detected period.
-    """
+    """Detects cost spikes and returns a consistent 'details' key to avoid KeyErrors."""
     date_pattern = parse_date_intent(query_text)
     
-    # SQL query calculates a 7-day rolling average as a baseline
     anomaly_sql = f"""
     WITH stats AS (
         SELECT 
@@ -77,19 +66,30 @@ def detect_anomaly(query_text: str):
         
         if res.result and res.result.data_array and len(res.result.data_array) > 0:
             found_spikes = []
+            spike_descriptions = []
+            
             for row in res.result.data_array:
-                found_spikes.append({
+                # Create structured data
+                spike_info = {
                     "resource_id": row[0],
                     "cost": float(row[1]),
                     "avg": float(row[2]),
                     "date": row[3]
-                })
-            return {"status": "spikes_found", "data": found_spikes}
+                }
+                found_spikes.append(spike_info)
+                # Create a string description for the 'details' key
+                spike_descriptions.append(f"- {row[0]} cost ${float(row[1]):,.2f} on {row[3]}")
+
+            return {
+                "status": "spikes_found",
+                "data": found_spikes,
+                "details": "The following anomalies were detected:\n" + "\n".join(spike_descriptions)
+            }
             
     except Exception as e:
         return {"status": "error", "details": f"SQL Error: {str(e)}"}
 
-    # Fallback: Summary breakdown if no spikes are found
+    # Fallback Summary
     summary_sql = f"""
     SELECT cloud_provider, SUM(unblended_cost) 
     FROM {CATALOG}.{SCHEMA}.billing_summary 
@@ -100,35 +100,26 @@ def detect_anomaly(query_text: str):
         sum_res = w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=summary_sql)
         if sum_res.result and sum_res.result.data_array:
             breakdown = "\n".join([f"- {r[0]}: ${float(r[1]):,.2f}" for r in sum_res.result.data_array])
-            return {"status": "normal", "details": f"Usage summary for {date_pattern}:\n{breakdown}"}
+            return {
+                "status": "normal", 
+                "details": f"No spikes found. Summary for {date_pattern}:\n{breakdown}"
+            }
     except:
         pass
 
     return {"status": "normal", "details": f"No data found for {date_pattern}."}
 
 def lookup_lakebase_memory(resource_id: str):
-    """
-    Searches the Lakebase Memory table for approval justifications.
-    """
+    """Searches Lakebase Memory for approval justifications."""
     memory_sql = f"""
-    SELECT note, approved_by 
-    FROM {CATALOG}.{SCHEMA}.lakebase_memory 
-    WHERE resource_id = '{resource_id}'
-    LIMIT 1
+    SELECT note, approved_by FROM {CATALOG}.{SCHEMA}.lakebase_memory 
+    WHERE resource_id = '{resource_id}' LIMIT 1
     """
-    
     try:
-        res = w.statement_execution.execute_statement(
-            warehouse_id=WAREHOUSE_ID, 
-            statement=memory_sql
-        )
-        
+        res = w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=memory_sql)
         if res.result and res.result.data_array and len(res.result.data_array) > 0:
-            note = res.result.data_array[0][0]
-            approver = res.result.data_array[0][1]
-            return f"Context from Lakebase: Approved by {approver} - '{note}'"
-            
-    except Exception as e:
-        print(f"Memory lookup error: {e}")
+            return f"Context found: Approved by {res.result.data_array[0][1]} - '{res.result.data_array[0][0]}'"
+    except:
+        pass
         
     return "No prior approval notes found in Lakebase memory for this resource."

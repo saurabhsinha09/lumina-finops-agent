@@ -134,3 +134,30 @@ def lookup_lakebase_memory(resource_id: str):
         pass
         
     return "No prior approval notes found in Lakebase memory for this resource."
+
+def save_chat_message(session_id: str, user_email: str, role: str, content: str):
+    """Persists every turn of the conversation to Delta."""
+    insert_sql = f"""
+    INSERT INTO {CATALOG}.{SCHEMA}.chat_history 
+    VALUES ('{session_id}', '{user_email}', '{role}', '{content.replace("'", "''")}', CURRENT_TIMESTAMP())
+    """
+    try:
+        w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=insert_sql)
+    except Exception as e:
+        print(f"History Save Error: {e}")
+
+def load_chat_history(user_email: str, limit: int = 10):
+    """Retrieves the last N messages for the user to rebuild context."""
+    load_sql = f"""
+    SELECT role, content FROM {CATALOG}.{SCHEMA}.chat_history 
+    WHERE user_email = '{user_email}' 
+    ORDER BY timestamp DESC LIMIT {limit}
+    """
+    try:
+        res = w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=load_sql)
+        if res.result and res.result.data_array:
+            # Reverse because we fetched DESC but want to display CHRONOLOGICAL
+            return [{"role": r[0], "content": r[1]} for r in reversed(res.result.data_array)]
+    except:
+        pass
+    return []

@@ -6,6 +6,11 @@ from tools import load_chat_history, save_chat_message, persist_decision
 
 st.set_page_config(page_title="Lumina FinOps Agent", layout="wide")
 
+# CONFIGURATION & IDENTITY ---
+GENIE_SPACE_ID = os.getenv("GENIE_SPACE_ID")
+workspace_url = os.getenv("WORKSPACE_URL")
+org_id = os.getenv("ORG_ID")
+
 # Identity & Session
 user_email = st.context.headers.get("X-Forwarded-Email", "developer@company.com")
 if "session_id" not in st.session_state:
@@ -17,13 +22,15 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.title("🛡️ Governance Center")
     st.info(f"User: {user_email}")
-    genie_id = os.getenv("GENIE_SPACE_ID", "")
-    st.link_button("🚀 Open Genie Deep Dive", f"https://{st.context.headers.get('Host')}/explore/genie/{genie_id}")
+    full_genie_url = f"{workspace_url}/genie/rooms/{GENIE_SPACE_ID}?o={org_id}"
+    st.link_button("🚀 Open Genie Deep Dive", full_genie_url)
+    st.divider()
     if st.button("Reset Session"):
         st.session_state.messages = []
         st.rerun()
 
 st.title("🤖 Lumina FinOps Assistant")
+st.caption("AI-Powered Cloud Cost Governance & Anomaly Detection")
 
 # Display Chat History
 for m in st.session_state.messages:

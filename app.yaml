@@ -13,3 +13,7 @@ env:
     value: "finops_gold"
   - name: "GENIE_SPACE_ID"
     value: "01f149e347941ef29f3fe1ca90030478"
+  - name: "WORKSPACE_URL"
+    value: "https://dbc-7d732950-be66.cloud.databricks.com"
+  - name: "ORG_ID"
+    value: "7474655178011522"

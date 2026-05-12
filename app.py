@@ -1,64 +1,71 @@
 import streamlit as st
-import os
 import uuid
+import os
 from graph import finops_agent
-from tools import load_chat_history, save_chat_message, persist_decision
+from tools import load_chat_history, save_chat_message, persist_decision, ask_genie
 
-st.set_page_config(page_title="Lumina FinOps Agent", layout="wide")
+# Identity & Configuration
+user_email = st.context.headers.get("X-Forwarded-Email", "user@databricks.com")
 
-# CONFIGURATION & IDENTITY ---
-GENIE_SPACE_ID = os.getenv("GENIE_SPACE_ID")
-workspace_url = os.getenv("WORKSPACE_URL")
-org_id = os.getenv("ORG_ID")
+st.set_page_config(page_title="FinOps AI Agent", layout="wide")
 
-# Identity & Session
-user_email = st.context.headers.get("X-Forwarded-Email", "developer@company.com")
-if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
-if "messages" not in st.session_state:
-    st.session_state.messages = load_chat_history(user_email)
+# --- UI Layout ---
+st.title("🤖 Lumina FinOps Agent")
+st.caption("Powered by Databricks SDK & Genie Spaces")
 
-# Sidebar with Genie Link (Pillar: Genie)
-with st.sidebar:
-    st.title("🛡️ Governance Center")
-    st.info(f"User: {user_email}")
-    full_genie_url = f"{workspace_url}/genie/rooms/{GENIE_SPACE_ID}?o={org_id}"
-    st.link_button("🚀 Open Genie Deep Dive", full_genie_url)
-    st.divider()
-    if st.button("Reset Session"):
-        st.session_state.messages = []
-        st.rerun()
+# Tabs for separate interaction styles
+tab_governance, tab_explore = st.tabs(["📊 Anomaly Governance", "🧞 Ask Genie Anything"])
 
-st.title("🤖 Lumina FinOps Assistant")
-st.caption("AI-Powered Cloud Cost Governance & Anomaly Detection")
+with tab_governance:
+    # Historical logic for the main agent
+    if "messages" not in st.session_state:
+        st.session_state.messages = load_chat_history(user_email)
 
-# Display Chat History
-for m in st.session_state.messages:
-    with st.chat_message(m["role"]):
-        st.markdown(m["content"])
+    for m in st.session_state.messages:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
 
-# Chat Input (Pillar: Agent Bricks)
-if prompt := st.chat_input("Analyze spikes in March..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"): st.markdown(prompt)
-    save_chat_message(st.session_state.session_id, user_email, "user", prompt)
+    if prompt := st.chat_input("Explain the spikes for March 2026", key="gov_input"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"): st.markdown(prompt)
+        
+        with st.chat_message("assistant"):
+            with st.spinner("Analyzing and coordinating with Genie SDK..."):
+                result = finops_agent.invoke({"messages": [prompt]})
+                ans = result["final_report"]
+                st.markdown(ans)
+                save_chat_message(str(uuid.uuid4()), user_email, "assistant", ans)
+                st.session_state.messages.append({"role": "assistant", "content": ans})
 
-    with st.chat_message("assistant"):
-        # Invoke the LangGraph Agentic Loop
-        with st.spinner("Agent Bricks working..."):
-            result = finops_agent.invoke({"messages": [prompt]})
-            ans = result["final_report"]
-            st.markdown(ans)
-            
-            st.session_state.messages.append({"role": "assistant", "content": ans})
-            save_chat_message(st.session_state.session_id, user_email, "assistant", ans)
+with tab_explore:
+    st.subheader("Direct Data Conversation")
+    st.write("Converse directly with the Genie Space via SDK for ad-hoc summaries.")
 
-# Action Layer (Pillar: Lakebase Persistence)
-with st.expander("🛠️ Take Action"):
+    if "genie_chat" not in st.session_state:
+        st.session_state.genie_chat = []
+
+    for g in st.session_state.genie_chat:
+        with st.chat_message(g["role"]):
+            st.markdown(g["content"])
+
+    if g_prompt := st.chat_input("How many EC2 instances spiked in Jan?", key="genie_input"):
+        st.session_state.genie_chat.append({"role": "user", "content": g_prompt})
+        with st.chat_message("user"): st.markdown(g_prompt)
+        
+        with st.chat_message("assistant"):
+            with st.spinner("Genie is generating a summary..."):
+                # Requirement B: Prompt sent to Genie Space via SDK
+                response = ask_genie(g_prompt) 
+                st.markdown(response)
+                st.session_state.genie_chat.append({"role": "assistant", "content": response})
+
+# --- Bottom Action Layer (Pillar: Lakebase) ---
+st.divider()
+with st.expander("🛠️ Persist Decision to Lakebase"):
     c1, c2 = st.columns(2)
-    rid = c1.text_input("Resource ID")
-    act = c2.selectbox("Action", ["SNOOZE", "APPROVE"])
+    res_id = c1.text_input("Resource ID")
+    action = c2.selectbox("Decision", ["APPROVE", "SNOOZE"])
     note = st.text_area("Justification")
-    if st.button("Persist to Lakebase"):
-        res = persist_decision(rid, act, note, user_email)
-        st.success(res)
+    if st.button("Commit Decision"):
+        status = persist_decision(res_id, action, note, user_email)
+        st.success(status)

@@ -4,13 +4,6 @@ import os
 from graph import finops_agent
 from tools import load_chat_history, save_chat_message, persist_decision, ask_genie
 
-import pkg_resources
-try:
-    version = pkg_resources.get_distribution("databricks-sdk").version
-    st.write(f"SDK Version: {version}")
-except:
-    st.write("Could not determine version via pkg_resources")
-
 # Identity & Configuration
 user_email = st.context.headers.get("X-Forwarded-Email", "user@databricks.com")
 

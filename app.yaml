@@ -13,3 +13,8 @@ env:
     value: "finops_gold"
   - name: "GENIE_SPACE_ID"
     value: "01f149e347941ef29f3fe1ca90030478"
+
+authorization:
+  user_scopes:
+    - "all-apis"
+    - "sql"

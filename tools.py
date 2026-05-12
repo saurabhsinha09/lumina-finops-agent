@@ -42,52 +42,30 @@ def parse_date_intent(query_text: str):
 
 def ask_genie(prompt: str):
     """
-    Requirement B: Pure SDK Interaction.
-    Final refined version to handle 'GenieMessage' and 'GenieAnswer' variations.
+    Requirement B: Pure SDK Interaction (Optimized for SDK 0.33.0).
     """
     try:
-        # 1. Try the most common 'ask' method
-        # Many versions of the SDK use w.genie.ask(space_id, prompt)
-        response = w.genie.ask(
+        # In 0.33.0, we start a conversation and wait for the response.
+        # The SDK handles the polling automatically with this method.
+        response = w.genie.start_conversation_and_wait(
             space_id=GENIE_ID,
-            prompt=prompt
+            content=prompt
         )
         
-        # 2. Extract text from the object
-        # If it's a GenieAnswer object, look for .message
-        if hasattr(response, 'message'):
-            # If message is an object with .text (GenieMessage)
-            if hasattr(response.message, 'text'):
-                return response.message.text
-            # If message is just a string
-            return str(response.message)
-            
-        # 3. Fallback for GenieQueryResult or similar structures
-        if hasattr(response, 'answer'):
-            return response.answer
-            
+        # In 0.33.0, the response object is a 'Message'
+        # The text is stored in the 'text' attribute of that message.
         if hasattr(response, 'text'):
             return response.text
+        
+        # Fallback: check if it's nested in a message attribute
+        if hasattr(response, 'message') and hasattr(response.message, 'text'):
+            return response.message.text
 
-        # 4. Final safety check: if it's already a string
-        if isinstance(response, str):
-            return response
+        return "Genie processed the request but returned an empty response."
 
-        return str(response)
-
-    except AttributeError:
-        # If 'ask' truly doesn't exist, try 'start_conversation'
-        try:
-            conv = w.genie.start_conversation(space_id=GENIE_ID, content=prompt)
-            # The SDK might return a conversation where we need the latest message
-            if hasattr(conv, 'message') and hasattr(conv.message, 'text'):
-                return conv.message.text
-            return str(conv)
-        except Exception as e2:
-            return f"Genie SDK Error (Interface Mismatch): {str(e2)}"
-            
     except Exception as e:
-        return f"Genie SDK Error: {str(e)}"
+        # Special check for 0.33.0 method names
+        return f"Genie SDK 0.33.0 Error: {str(e)}"
 
 def detect_anomaly(query_text: str):
     """SQL-based detection of cost spikes > 20%."""

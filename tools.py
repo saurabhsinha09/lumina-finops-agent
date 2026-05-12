@@ -43,33 +43,33 @@ def parse_date_intent(query_text: str):
 def ask_genie(prompt: str):
     """
     Requirement B: Pure SDK Interaction.
-    Sends a prompt to the Genie Space and returns the text response.
+    Navigates the GenieMessage object to extract the response text.
     """
     try:
-        # The SDK typically expects 'prompt' for execute_query 
-        # or 'content' for conversation-based methods.
-        # execute_query is the most direct way to get an answer.
+        # Standard execution call
         response = w.genie.execute_query(
             space_id=GENIE_ID,
             prompt=prompt
         )
         
-        if response and response.answer:
+        # 1. Try to find the text in a 'message' or 'answer' attribute
+        if hasattr(response, 'answer') and response.answer:
             return response.answer
-        return "Genie analyzed the data but did not provide a specific summary."
+        
+        # 2. If it's a GenieMessage object, look for 'text' or 'content'
+        if hasattr(response, 'text'):
+            return response.text
+        
+        # 3. If it's a message object with a nested value (common in recent SDKs)
+        if hasattr(response, 'message') and hasattr(response.message, 'text'):
+            return response.message.text
+            
+        # 4. Last resort: Stringify the response if we can't find a specific attribute
+        # This helps us see the structure if it's still failing
+        return str(response)
 
     except Exception as e:
-        # If execute_query fails, we try the conversation method with the correct key
-        try:
-            # In some SDK versions, start_conversation_and_wait 
-            # uses the message structure
-            response = w.genie.start_conversation_and_wait(
-                space_id=GENIE_ID,
-                content=prompt  # 'content' is often used instead of 'prompt' here
-            )
-            return response.answer
-        except Exception as nested_e:
-            return f"Genie SDK Error: {str(nested_e)}"
+        return f"Genie SDK Error: {str(e)}"
 
 def detect_anomaly(query_text: str):
     """SQL-based detection of cost spikes > 20%."""

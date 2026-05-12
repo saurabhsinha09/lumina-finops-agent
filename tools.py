@@ -43,31 +43,49 @@ def parse_date_intent(query_text: str):
 def ask_genie(prompt: str):
     """
     Requirement B: Pure SDK Interaction.
-    Navigates the GenieMessage object to extract the response text.
+    Final refined version to handle 'GenieMessage' and 'GenieAnswer' variations.
     """
     try:
-        # Standard execution call
-        response = w.genie.execute_query(
+        # 1. Try the most common 'ask' method
+        # Many versions of the SDK use w.genie.ask(space_id, prompt)
+        response = w.genie.ask(
             space_id=GENIE_ID,
             prompt=prompt
         )
         
-        # 1. Try to find the text in a 'message' or 'answer' attribute
-        if hasattr(response, 'answer') and response.answer:
+        # 2. Extract text from the object
+        # If it's a GenieAnswer object, look for .message
+        if hasattr(response, 'message'):
+            # If message is an object with .text (GenieMessage)
+            if hasattr(response.message, 'text'):
+                return response.message.text
+            # If message is just a string
+            return str(response.message)
+            
+        # 3. Fallback for GenieQueryResult or similar structures
+        if hasattr(response, 'answer'):
             return response.answer
-        
-        # 2. If it's a GenieMessage object, look for 'text' or 'content'
+            
         if hasattr(response, 'text'):
             return response.text
-        
-        # 3. If it's a message object with a nested value (common in recent SDKs)
-        if hasattr(response, 'message') and hasattr(response.message, 'text'):
-            return response.message.text
-            
-        # 4. Last resort: Stringify the response if we can't find a specific attribute
-        # This helps us see the structure if it's still failing
+
+        # 4. Final safety check: if it's already a string
+        if isinstance(response, str):
+            return response
+
         return str(response)
 
+    except AttributeError:
+        # If 'ask' truly doesn't exist, try 'start_conversation'
+        try:
+            conv = w.genie.start_conversation(space_id=GENIE_ID, content=prompt)
+            # The SDK might return a conversation where we need the latest message
+            if hasattr(conv, 'message') and hasattr(conv.message, 'text'):
+                return conv.message.text
+            return str(conv)
+        except Exception as e2:
+            return f"Genie SDK Error (Interface Mismatch): {str(e2)}"
+            
     except Exception as e:
         return f"Genie SDK Error: {str(e)}"
 

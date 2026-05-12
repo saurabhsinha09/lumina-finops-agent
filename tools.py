@@ -9,6 +9,7 @@ w = WorkspaceClient()
 WAREHOUSE_ID = os.getenv("DATABRICKS_WAREHOUSE_ID")
 CATALOG = os.getenv("DATABRICKS_CATALOG", "finops")
 SCHEMA = os.getenv("DATABRICKS_SCHEMA", "finops_gold")
+GENIE_ID = os.getenv("GENIE_SPACE_ID")
 
 # --- 1. PERSISTENCE LOGIC (Chat History) ---
 
@@ -70,16 +71,24 @@ def safe_sql(val):
     return str(val).replace("'", "''").strip()
 
 def parse_date_intent(query_text: str):
-    """Maps natural language months to the dataset date patterns."""
+    """Dynamically extracts month/year pattern from text."""
+    import datetime
     query_lower = query_text.lower()
-    months_map = {
-        "oct": "2025-10", "nov": "2025-11", "dec": "2025-12",
-        "jan": "2026-01", "feb": "2026-02", "mar": "2026-03", "apr": "2026-04"
+    months = {
+        "jan": "01", "feb": "02", "mar": "03", "apr": "04", "may": "05", "jun": "06",
+        "jul": "07", "aug": "08", "sep": "09", "oct": "10", "nov": "11", "dec": "12"
     }
-    for key, val in months_map.items():
-        if key in query_lower: 
-            return val
-    return "2026-03" # Default fallback for the hackathon data
+    # Look for year (e.g., 2025, 2026)
+    year = "2026" # default hackathon year
+    for y in ["2024", "2025", "2026"]:
+        if y in query_lower: year = y
+    
+    # Look for month
+    for name, num in months.items():
+        if name in query_lower:
+            return f"{year}-{num}"
+    
+    return datetime.datetime.now().strftime("%Y-%m")
 
 def detect_anomaly(query_text: str):
     """Scans for billing spikes > 20% compared to 7-day baseline."""
@@ -131,19 +140,10 @@ def lookup_lakebase_memory(resource_id: str):
 # --- 4. Genie to converse with data ---
 
 def ask_genie(prompt: str):
-    """
-    Calls the Genie API to perform natural language discovery on the 
-    underlying datasets. This is used for 'Root Cause' investigation.
-    """
-    genie_id = os.getenv("GENIE_SPACE_ID")
+    """Direct API call to Genie for Root Cause or Conversation."""
     try:
-        # Start a conversation in the specified space
-        # We use the 'execute' method to get a direct answer
-        result = w.genie.ask(space_id=genie_id, prompt=prompt)
-        
-        # Genie returns an answer object; we extract the text response
-        if result and result.answer:
-            return result.answer
-        return "Genie was able to process the request but didn't find a specific root cause."
+        # Use the SDK to prompt the specific Genie Space
+        result = w.genie.ask(space_id=GENIE_ID, prompt=prompt)
+        return result.answer if result.answer else "Genie processed the request but found no details."
     except Exception as e:
-        return f"Genie Investigation Error: {str(e)}"
+        return f"Genie Error: {str(e)}"

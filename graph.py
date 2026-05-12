@@ -1,6 +1,6 @@
 from typing import TypedDict, List, Optional
 from langgraph.graph import StateGraph, END
-from tools import detect_anomaly, lookup_lakebase_memory
+from tools import detect_anomaly, lookup_lakebase_memory, ask_genie, parse_date_intent
 from prompts import AGENT_PERSONA
 
 class AgentState(TypedDict):
@@ -8,6 +8,7 @@ class AgentState(TypedDict):
     found_anomaly: bool
     resource_list: List[dict]
     final_report: str
+    genie_insights: str
 
 def analyze_billing_node(state: AgentState):
     """Node 1: Scan for spikes."""
@@ -21,6 +22,15 @@ def analyze_billing_node(state: AgentState):
             "final_report": f"I have identified the following cost anomalies:\n{res['details']}\n\n"
         }
     return {"found_anomaly": False, "final_report": res['details']}
+
+def genie_investigation_node(state: AgentState):
+    """Uses the generic target_date to ask Genie for context."""
+    resources = ", ".join([r['resource_id'] for r in state['resource_list']])
+    # Generic Prompt: No hardcoded 'March 2026'
+    query = f"Investigate the cost spikes for {resources} during {state['target_date']}. Identify the specific jobs or users responsible."
+    
+    insight = ask_genie(query)
+    return {"genie_insights": f"### 💡 Genie Root Cause Analysis\n{insight}\n\n"}
 
 def check_memory_node(state: AgentState):
     """Node 2: Correlate with Lakebase Memory."""
@@ -43,17 +53,14 @@ def responder_node(state: AgentState):
 # Define Graph
 workflow = StateGraph(AgentState)
 workflow.add_node("analyze_billing", analyze_billing_node)
+workflow.add_node("genie_investigation", genie_investigation_node)
 workflow.add_node("check_memory", check_memory_node)
 workflow.add_node("responder", responder_node)
 
 workflow.set_entry_point("analyze_billing")
 
-workflow.add_conditional_edges(
-    "analyze_billing",
-    lambda x: "check_memory" if x["found_anomaly"] else "responder"
-)
-
+workflow.add_conditional_edges("analyze_billing", lambda x: "genie_investigation" if x["found_anomaly"] else "responder")
+workflow.add_edge("genie_investigation", "check_memory")
 workflow.add_edge("check_memory", "responder")
 workflow.add_edge("responder", END)
-
 finops_agent = workflow.compile()

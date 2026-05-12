@@ -46,29 +46,30 @@ def ask_genie(prompt: str):
     Sends a prompt to the Genie Space and returns the text response.
     """
     try:
-        # We use start_conversation_and_wait to handle the 
-        # async nature of LLM generation in Genie.
-        response = w.genie.start_conversation_and_wait(
+        # The SDK typically expects 'prompt' for execute_query 
+        # or 'content' for conversation-based methods.
+        # execute_query is the most direct way to get an answer.
+        response = w.genie.execute_query(
             space_id=GENIE_ID,
             prompt=prompt
         )
         
-        # Extract the text answer from the result object
         if response and response.answer:
             return response.answer
-        return "Genie analyzed the data but did not provide a specific summary for this query."
-        
-    except AttributeError:
-        # Fallback for older SDK versions or different room configurations
-        try:
-            # Some SDK versions use 'execute_queries' for Genie spaces
-            res = w.genie.execute_query(space_id=GENIE_ID, prompt=prompt)
-            return res.answer
-        except Exception as nested_e:
-            return f"Genie SDK Error (Method Not Found): {str(nested_e)}"
-            
+        return "Genie analyzed the data but did not provide a specific summary."
+
     except Exception as e:
-        return f"Genie SDK Error: {str(e)}"
+        # If execute_query fails, we try the conversation method with the correct key
+        try:
+            # In some SDK versions, start_conversation_and_wait 
+            # uses the message structure
+            response = w.genie.start_conversation_and_wait(
+                space_id=GENIE_ID,
+                content=prompt  # 'content' is often used instead of 'prompt' here
+            )
+            return response.answer
+        except Exception as nested_e:
+            return f"Genie SDK Error: {str(nested_e)}"
 
 def detect_anomaly(query_text: str):
     """SQL-based detection of cost spikes > 20%."""

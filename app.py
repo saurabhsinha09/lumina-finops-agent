@@ -4,6 +4,9 @@ import os
 from graph import finops_agent
 from tools import load_chat_history, save_chat_message, persist_decision, ask_genie
 
+import databricks.sdk
+print(f"SDK VERSION: {databricks.sdk.__version__}")
+
 # Identity & Configuration
 user_email = st.context.headers.get("X-Forwarded-Email", "user@databricks.com")
 

@@ -126,3 +126,24 @@ def lookup_lakebase_memory(resource_id: str):
     except:
         pass
     return None
+
+
+# --- 4. Genie to converse with data ---
+
+def ask_genie(prompt: str):
+    """
+    Calls the Genie API to perform natural language discovery on the 
+    underlying datasets. This is used for 'Root Cause' investigation.
+    """
+    genie_id = os.getenv("GENIE_SPACE_ID")
+    try:
+        # Start a conversation in the specified space
+        # We use the 'execute' method to get a direct answer
+        result = w.genie.ask(space_id=genie_id, prompt=prompt)
+        
+        # Genie returns an answer object; we extract the text response
+        if result and result.answer:
+            return result.answer
+        return "Genie was able to process the request but didn't find a specific root cause."
+    except Exception as e:
+        return f"Genie Investigation Error: {str(e)}"

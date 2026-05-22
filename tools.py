@@ -226,10 +226,11 @@ def detect_anomaly(query_text: str):
             ) AS avg_7d
         FROM daily_costs
     )
-    SELECT resource_id, daily_cost, avg_7d, usage_start_date
+    SELECT resource_id, round(daily_cost,2), round(avg_7d,2), usage_start_date
     FROM stats
     WHERE daily_cost > (avg_7d * 1.2) AND avg_7d > 0
     ORDER BY (daily_cost - avg_7d) DESC
+    LIMIT 20
     """
     try:
         res = w.statement_execution.execute_statement(

@@ -1,0 +1,5 @@
+event_id,resource_id,note,approved_by,expiry_date
+MEM-001,aws-s3-prod-001,Tata Elxsi Phase 1 Data Migration - Approved by Archi Board.,Senior CSA,2025-12-01
+MEM-003,aws-databricks-prod-001,Year-end financial reporting batch processing.,Finance Controller,2026-01-05
+MEM-004,azure-sql database-prod-001,Scaling up for Customer Portal promo campaign.,Product Owner,2026-02-15
+MEM-002,gcp-compute engine-staging-001,Quarterly Load Testing for modern data platform.,Platform Ops,2026-03-30

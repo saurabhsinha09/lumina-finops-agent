@@ -60,6 +60,8 @@ Three specific pain points this project addresses:
 
 ## 🎥 Live Demo
 
+> 📽️ **[Watch the full 5-minute demo on Loom](https://www.loom.com/share/8441d629441e4b6084c2daa7e0636c00)**
+
 | Tab | What it does |
 |---|---|
 | 📊 **Anomaly Governance** | LangGraph agent scans for spikes → correlates with Lakebase memory → presents a contextualised report |

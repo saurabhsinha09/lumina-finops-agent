@@ -236,7 +236,7 @@ tab_governance, tab_explore = st.tabs(["📊 Anomaly Governance", "🧞 Ask Geni
 # ── TAB 1: Anomaly Governance (LangGraph agent) ───────────────────────────
 with tab_governance:
     if "messages" not in st.session_state:
-        st.session_state.messages = load_chat_history(user_email)
+        st.session_state.messages = []  #clear previous chat history on page reload
 
     for m in st.session_state.messages:
         with st.chat_message(m["role"]):
